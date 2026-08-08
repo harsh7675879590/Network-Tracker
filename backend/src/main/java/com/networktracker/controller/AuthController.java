@@ -10,7 +10,6 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 /**
  * Auth controller — returns the authenticated user's profile from JWT claims.
@@ -21,11 +20,12 @@ public class AuthController {
 
     @GetMapping("/userinfo")
     public ResponseEntity<ApiDtos.UserInfo> getUserInfo(@AuthenticationPrincipal Jwt jwt) {
-        @SuppressWarnings("unchecked")
         Map<String, Object> realmAccess = jwt.getClaimAsMap("realm_access");
         List<String> roles = List.of();
         if (realmAccess != null && realmAccess.containsKey("roles")) {
-            roles = ((List<String>) realmAccess.get("roles"));
+            @SuppressWarnings("unchecked")
+            List<String> extracted = (List<String>) realmAccess.get("roles");
+            roles = extracted;
         }
 
         ApiDtos.UserInfo userInfo = ApiDtos.UserInfo.builder()

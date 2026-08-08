@@ -8,6 +8,8 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Component;
 
+import java.util.Objects;
+
 /**
  * Kafka consumer that listens to the 'network.congestion.alerts' topic
  * and pushes received congestion alerts to all WebSocket-connected clients
@@ -45,7 +47,7 @@ public class AlertWebSocketHandler {
             ApiDtos.CongestionAlert alert = objectMapper.readValue(alertJson, ApiDtos.CongestionAlert.class);
 
             // Broadcast to all connected WebSocket clients
-            messagingTemplate.convertAndSend("/topic/alerts", alert);
+            messagingTemplate.convertAndSend("/topic/alerts", Objects.requireNonNull(alert));
 
             log.info("Pushed congestion alert {} to WebSocket clients (severity: {})",
                     alert.getAlertId(), alert.getSeverity());

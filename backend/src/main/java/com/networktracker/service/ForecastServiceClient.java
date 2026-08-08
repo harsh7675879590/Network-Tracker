@@ -13,7 +13,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 
 import java.time.OffsetDateTime;
 import java.util.Collections;
-import java.util.Map;
+import java.util.Objects;
 import java.util.function.Supplier;
 
 /**
@@ -47,7 +47,7 @@ public class ForecastServiceClient {
         Supplier<ApiDtos.ForecastResponse> supplier = CircuitBreaker.decorateSupplier(circuitBreaker, () ->
             webClient.post()
                 .uri("/predict")
-                .bodyValue(request)
+                .bodyValue(Objects.requireNonNull(request, "Forecast request must not be null"))
                 .retrieve()
                 .bodyToMono(ApiDtos.ForecastResponse.class)
                 .block()

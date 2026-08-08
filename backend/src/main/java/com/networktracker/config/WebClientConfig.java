@@ -8,6 +8,8 @@ import org.springframework.security.oauth2.client.registration.ClientRegistratio
 import org.springframework.security.oauth2.client.web.reactive.function.client.ServletOAuth2AuthorizedClientExchangeFilterFunction;
 import org.springframework.web.reactive.function.client.WebClient;
 
+import java.util.Objects;
+
 /**
  * WebClient beans pre-configured with service-to-service OAuth2 authentication
  * (client-credentials flow via Keycloak) and base URLs for each downstream
@@ -49,7 +51,7 @@ public class WebClientConfig {
         oauth2Client.setDefaultClientRegistrationId("internal-service");
 
         return WebClient.builder()
-                .baseUrl(baseUrl)
+                .baseUrl(Objects.requireNonNull(baseUrl, "Service base URL must not be null"))
                 .filter(oauth2Client)
                 .build();
     }

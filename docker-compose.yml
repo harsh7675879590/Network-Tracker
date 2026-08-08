@@ -103,7 +103,7 @@ services:
     volumes:
       - chromadb-data:/chroma/chroma
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8000/api/v1/heartbeat || exit 1"]
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/8000' || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -126,7 +126,7 @@ services:
       - zookeeper-data:/var/lib/zookeeper/data
       - zookeeper-log:/var/lib/zookeeper/log
     healthcheck:
-      test: ["CMD-SHELL", "echo ruok | nc localhost 2181 | grep imok"]
+      test: ["CMD-SHELL", "cub zk-ready localhost:2181 10"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -263,7 +263,7 @@ services:
       - "16686:16686"  # Jaeger UI
       - "14250:14250"  # gRPC collector
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:16686/ || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:16686/ || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 10

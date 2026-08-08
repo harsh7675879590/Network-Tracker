@@ -10,11 +10,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
-import org.springframework.web.reactive.function.client.WebClientResponseException;
 
-import java.time.OffsetDateTime;
 import java.util.Collections;
 import java.util.Map;
+import java.util.Objects;
 import java.util.function.Supplier;
 
 /**
@@ -48,10 +47,10 @@ public class RagServiceClient {
         Supplier<ApiDtos.ChatResponse> supplier = CircuitBreaker.decorateSupplier(circuitBreaker, () ->
             webClient.post()
                 .uri("/query")
-                .bodyValue(Map.of(
+                .bodyValue(Objects.requireNonNull(Map.of(
                     "question", request.getQuestion(),
                     "context_filters", request.getContextFilters() != null ? request.getContextFilters() : Map.of()
-                ))
+                )))
                 .retrieve()
                 .bodyToMono(ApiDtos.ChatResponse.class)
                 .block()
