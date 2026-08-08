@@ -1,0 +1,482 @@
+openapi: 3.0.3
+info:
+  title: NetworkTracker Gateway API
+  description: >
+    Spring Boot gateway — the single public-facing API for the React frontend.
+    Handles authentication, routes requests to downstream FastAPI AI services,
+    and exposes a WebSocket endpoint for real-time congestion alerts.
+  version: 1.0.0
+  contact:
+    name: NetworkTracker Team
+
+servers:
+  - url: http://localhost:8081
+    description: Local development server
+
+security:
+  - bearerAuth: []
+
+paths:
+  # ──────────────────────────────────────────────
+  # Auth endpoints
+  # ──────────────────────────────────────────────
+  /api/auth/userinfo:
+    get:
+      tags: [Auth]
+      summary: Get current user info
+      description: Returns the authenticated user's profile from the JWT claims.
+      operationId: getUserInfo
+      responses:
+        '200':
+          description: User info retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserInfo'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # ──────────────────────────────────────────────
+  # Forecast endpoints
+  # ──────────────────────────────────────────────
+  /api/forecast/predict:
+    post:
+      tags: [Forecast]
+      summary: Request a traffic forecast
+      description: >
+        Proxies to the FastAPI forecasting service. Accepts historical traffic
+        parameters and returns future predictions.
+      operationId: requestForecast
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ForecastRequest'
+      responses:
+        '200':
+          description: Forecast generated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ForecastResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /api/forecast/history:
+    get:
+      tags: [Forecast]
+      summary: Get historical traffic data
+      description: Returns historical traffic data from TimescaleDB for charting.
+      operationId: getTrafficHistory
+      parameters:
+        - name: metric
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [bandwidth, packets, latency, connections]
+        - name: start_time
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+        - name: end_time
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+        - name: granularity
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [1m, 5m, 15m, 1h, 1d]
+            default: 5m
+      responses:
+        '200':
+          description: Historical data returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrafficHistoryResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # ──────────────────────────────────────────────
+  # Congestion endpoints
+  # ──────────────────────────────────────────────
+  /api/congestion/status:
+    get:
+      tags: [Congestion]
+      summary: Get current congestion status
+      description: Returns the latest congestion analysis snapshot.
+      operationId: getCongestionStatus
+      responses:
+        '200':
+          description: Current congestion status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CongestionStatus'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/congestion/alerts:
+    get:
+      tags: [Congestion]
+      summary: Get recent congestion alerts
+      description: Returns the most recent congestion alerts (paginated).
+      operationId: getRecentAlerts
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 200
+        - name: severity
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [low, medium, high, critical]
+      responses:
+        '200':
+          description: Recent alerts returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlertsListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # ──────────────────────────────────────────────
+  # Chat / RAG endpoints
+  # ──────────────────────────────────────────────
+  /api/chat/query:
+    post:
+      tags: [Chat]
+      summary: Ask a network question
+      description: >
+        Proxies to the FastAPI RAG chatbot service. Sends a natural-language
+        question about the network and returns an AI-generated answer with
+        source citations.
+      operationId: chatQuery
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatRequest'
+      responses:
+        '200':
+          description: Answer generated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /api/chat/history:
+    get:
+      tags: [Chat]
+      summary: Get chat history
+      description: Returns the authenticated user's recent chat history.
+      operationId: getChatHistory
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: Chat history returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatHistoryResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Keycloak-issued JWT token
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid JWT
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    ServiceUnavailable:
+      description: Downstream AI service unavailable (circuit breaker open)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+    # ── Auth ──
+    UserInfo:
+      type: object
+      required: [user_id, username, email, roles]
+      properties:
+        user_id:
+          type: string
+          format: uuid
+        username:
+          type: string
+        email:
+          type: string
+          format: email
+        roles:
+          type: array
+          items:
+            type: string
+
+    # ── Forecast ──
+    ForecastRequest:
+      type: object
+      required: [metric, time_range]
+      properties:
+        metric:
+          type: string
+          enum: [bandwidth, packets, latency, connections]
+          description: The network metric to forecast
+        time_range:
+          type: object
+          required: [start, end]
+          properties:
+            start:
+              type: string
+              format: date-time
+            end:
+              type: string
+              format: date-time
+        granularity:
+          type: string
+          enum: [1m, 5m, 15m, 1h, 1d]
+          default: 5m
+          description: Prediction interval granularity
+
+    ForecastResponse:
+      type: object
+      required: [predictions, metadata]
+      properties:
+        predictions:
+          type: array
+          items:
+            $ref: '#/components/schemas/PredictionPoint'
+        metadata:
+          type: object
+          properties:
+            model_version:
+              type: string
+            metric:
+              type: string
+            confidence_interval:
+              type: number
+              format: float
+            generated_at:
+              type: string
+              format: date-time
+
+    PredictionPoint:
+      type: object
+      required: [timestamp, value]
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        value:
+          type: number
+          format: float
+        lower_bound:
+          type: number
+          format: float
+        upper_bound:
+          type: number
+          format: float
+
+    TrafficHistoryResponse:
+      type: object
+      required: [data, metric]
+      properties:
+        metric:
+          type: string
+        data:
+          type: array
+          items:
+            type: object
+            required: [timestamp, value]
+            properties:
+              timestamp:
+                type: string
+                format: date-time
+              value:
+                type: number
+                format: float
+
+    # ── Congestion ──
+    CongestionStatus:
+      type: object
+      required: [overall_status, active_anomalies, last_updated]
+      properties:
+        overall_status:
+          type: string
+          enum: [normal, elevated, congested, critical]
+        active_anomalies:
+          type: integer
+        last_updated:
+          type: string
+          format: date-time
+
+    AlertsListResponse:
+      type: object
+      required: [alerts, total]
+      properties:
+        alerts:
+          type: array
+          items:
+            $ref: '#/components/schemas/CongestionAlert'
+        total:
+          type: integer
+
+    CongestionAlert:
+      type: object
+      required: [alert_id, severity, source_ip, metric, threshold, actual_value, timestamp]
+      properties:
+        alert_id:
+          type: string
+          format: uuid
+        severity:
+          type: string
+          enum: [low, medium, high, critical]
+        source_ip:
+          type: string
+        metric:
+          type: string
+        threshold:
+          type: number
+          format: float
+        actual_value:
+          type: number
+          format: float
+        timestamp:
+          type: string
+          format: date-time
+        message:
+          type: string
+
+    # ── Chat ──
+    ChatRequest:
+      type: object
+      required: [question]
+      properties:
+        question:
+          type: string
+          description: Natural-language question about the network
+          example: "Which IPs were rejected today?"
+        context_filters:
+          type: object
+          properties:
+            time_range:
+              type: object
+              properties:
+                start:
+                  type: string
+                  format: date-time
+                end:
+                  type: string
+                  format: date-time
+            log_sources:
+              type: array
+              items:
+                type: string
+
+    ChatResponse:
+      type: object
+      required: [answer, sources]
+      properties:
+        answer:
+          type: string
+          description: AI-generated answer
+        sources:
+          type: array
+          items:
+            $ref: '#/components/schemas/SourceCitation'
+        confidence:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+
+    SourceCitation:
+      type: object
+      required: [log_reference, relevance_score]
+      properties:
+        log_reference:
+          type: string
+          description: Reference to the source log entry
+        content_snippet:
+          type: string
+          description: Relevant excerpt from the log
+        relevance_score:
+          type: number
+          format: float
+
+    ChatHistoryResponse:
+      type: object
+      required: [messages]
+      properties:
+        messages:
+          type: array
+          items:
+            type: object
+            required: [role, content, timestamp]
+            properties:
+              role:
+                type: string
+                enum: [user, assistant]
+              content:
+                type: string
+              timestamp:
+                type: string
+                format: date-time
+              sources:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SourceCitation'
+
+    # ── Errors ──
+    ErrorResponse:
+      type: object
+      required: [error, message, timestamp]
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        details:
+          type: object
+          additionalProperties: true

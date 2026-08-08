@@ -1,0 +1,125 @@
+asyncapi: 2.6.0
+info:
+  title: NetworkTracker Streaming API
+  version: 1.0.0
+  description: >
+    AsyncAPI specification for NetworkTracker's real-time data streaming
+    architecture. Defines Kafka topics, message formats, producers, and
+    consumers for network traffic data and congestion alerts.
+
+servers:
+  development:
+    url: localhost:9092
+    protocol: kafka
+    description: Local Kafka broker (Docker Compose)
+
+channels:
+  network.traffic.raw:
+    description: >
+      Raw network traffic data published by the Network Data Simulator
+      (or a real data ingestion pipeline). Consumed by the Congestion
+      Detection Service for real-time anomaly analysis and optionally
+      by the Forecasting Service for model updates.
+    publish:
+      operationId: publishTrafficData
+      summary: Publish raw network traffic data
+      message:
+        $ref: '#/components/messages/TrafficDataMessage'
+    subscribe:
+      operationId: consumeTrafficData
+      summary: Consume raw traffic data for analysis
+      message:
+        $ref: '#/components/messages/TrafficDataMessage'
+
+  network.congestion.alerts:
+    description: >
+      Congestion alert events published by the Congestion Detection Service
+      when an anomaly is detected. Consumed by the Spring Boot gateway,
+      which pushes alerts to connected frontend clients via WebSocket.
+    publish:
+      operationId: publishCongestionAlert
+      summary: Publish a congestion alert event
+      message:
+        $ref: '#/components/messages/CongestionAlertMessage'
+    subscribe:
+      operationId: consumeCongestionAlert
+      summary: Consume congestion alerts for WebSocket push
+      message:
+        $ref: '#/components/messages/CongestionAlertMessage'
+
+components:
+  messages:
+    TrafficDataMessage:
+      name: TrafficData
+      title: Network Traffic Data Point
+      summary: A single network traffic measurement
+      contentType: application/json
+      payload:
+        type: object
+        required:
+          - timestamp
+          - metric
+          - value
+          - source_ip
+        properties:
+          timestamp:
+            type: string
+            format: date-time
+            description: ISO 8601 timestamp of the measurement
+          metric:
+            type: string
+            enum: [bandwidth, packets, latency, connections]
+            description: The type of network metric being reported
+          value:
+            type: number
+            format: float
+            description: The measured value
+          source_ip:
+            type: string
+            description: IP address of the traffic source
+          metadata:
+            type: object
+            description: Optional additional context
+            properties:
+              interface:
+                type: string
+                description: Network interface identifier
+              protocol:
+                type: string
+                description: Network protocol (TCP, UDP, etc.)
+              destination_ip:
+                type: string
+                description: Destination IP address
+              bytes_transferred:
+                type: integer
+                description: Total bytes in this measurement window
+            additionalProperties: true
+
+    CongestionAlertMessage:
+      name: CongestionAlert
+      title: Congestion Alert Event
+      summary: >
+        Anomaly detection alert published when traffic data exceeds
+        configured thresholds
+      contentType: application/json
+      payload:
+        $ref: 'file:../events/congestion-alert.schema.json'
+
+  # ── Producer/Consumer mapping (documentation) ──
+  # This section documents which services produce/consume each topic.
+  # It is not part of the AsyncAPI spec but is useful for understanding
+  # the data flow.
+  #
+  # network.traffic.raw:
+  #   Producers:
+  #     - Network Data Simulator (ai-services/simulator/)
+  #     - [Future] Real data ingestion pipeline
+  #   Consumers:
+  #     - Congestion Detection Service (ai-services/congestion/)
+  #     - [Optional] Forecasting Service (ai-services/forecast/)
+  #
+  # network.congestion.alerts:
+  #   Producers:
+  #     - Congestion Detection Service (ai-services/congestion/)
+  #   Consumers:
+  #     - Spring Boot Gateway (backend/) → WebSocket push to frontend

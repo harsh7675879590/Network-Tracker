@@ -1,0 +1,4 @@
+confluent-kafka>=2.4.0
+pydantic>=2.7.0
+pydantic-settings>=2.2.0
+python-json-logger>=2.0.7

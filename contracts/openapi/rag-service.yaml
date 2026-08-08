@@ -1,0 +1,260 @@
+openapi: 3.0.3
+info:
+  title: NetworkTracker RAG Chatbot Service
+  description: >
+    FastAPI-based RAG (Retrieval-Augmented Generation) chatbot service.
+    Ingests network logs into ChromaDB and answers natural-language queries
+    about the network with source citations.
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:8100
+    description: Local development server
+
+security:
+  - bearerAuth: []
+
+paths:
+  /query:
+    post:
+      summary: Query the network knowledge base
+      description: >
+        Accepts a natural-language question about the network. Retrieves
+        relevant log entries from ChromaDB, constructs a prompt, calls the
+        LLM, and returns a structured answer with source citations.
+      operationId: queryKnowledgeBase
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RagQueryRequest'
+      responses:
+        '200':
+          description: Answer generated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RagQueryResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          description: Internal error (LLM call failed, ChromaDB unreachable, etc.)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /ingest:
+    post:
+      summary: Ingest network logs
+      description: >
+        Accepts raw network log entries, chunks them, generates embeddings,
+        and upserts into ChromaDB for future retrieval.
+      operationId: ingestLogs
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IngestRequest'
+      responses:
+        '202':
+          description: Ingestion accepted and processing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestResponse'
+        '400':
+          description: Invalid log format
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /health:
+    get:
+      summary: Health check
+      description: Returns service health including ChromaDB connectivity.
+      operationId: healthCheck
+      security: []
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        Service-to-service JWT obtained via OAuth2 client-credentials flow
+        against Keycloak.
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid service-to-service JWT
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+    RagQueryRequest:
+      type: object
+      required: [question]
+      properties:
+        question:
+          type: string
+          description: Natural-language question about the network
+          example: "Which IPs were rejected today?"
+        context_filters:
+          type: object
+          description: Optional filters to narrow the retrieval scope
+          properties:
+            time_range:
+              type: object
+              properties:
+                start:
+                  type: string
+                  format: date-time
+                end:
+                  type: string
+                  format: date-time
+            log_sources:
+              type: array
+              items:
+                type: string
+              description: Filter by specific log source identifiers
+        max_sources:
+          type: integer
+          default: 5
+          minimum: 1
+          maximum: 20
+          description: Maximum number of source citations to return
+
+    RagQueryResponse:
+      type: object
+      required: [answer, sources]
+      properties:
+        answer:
+          type: string
+          description: AI-generated answer to the question
+        sources:
+          type: array
+          items:
+            $ref: '#/components/schemas/SourceCitation'
+          description: Log entries used to generate the answer
+        confidence:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          description: Model confidence score for the answer
+        processing_time_ms:
+          type: integer
+          description: Total processing time in milliseconds
+
+    SourceCitation:
+      type: object
+      required: [log_reference, relevance_score]
+      properties:
+        log_reference:
+          type: string
+          description: Unique reference to the source log entry
+        content_snippet:
+          type: string
+          description: Relevant excerpt from the log entry
+        relevance_score:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          description: Cosine similarity score from vector retrieval
+        metadata:
+          type: object
+          additionalProperties: true
+          description: Additional metadata about the source (timestamp, source IP, etc.)
+
+    IngestRequest:
+      type: object
+      required: [logs]
+      properties:
+        logs:
+          type: array
+          items:
+            type: object
+            required: [content]
+            properties:
+              content:
+                type: string
+                description: Raw log entry text
+              source:
+                type: string
+                description: Log source identifier
+              timestamp:
+                type: string
+                format: date-time
+              metadata:
+                type: object
+                additionalProperties: true
+        collection_name:
+          type: string
+          default: network_logs
+          description: ChromaDB collection to ingest into
+
+    IngestResponse:
+      type: object
+      required: [status, documents_processed]
+      properties:
+        status:
+          type: string
+          enum: [accepted, processing, completed]
+        documents_processed:
+          type: integer
+        chunks_created:
+          type: integer
+        collection_name:
+          type: string
+
+    HealthResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+        chromadb_connected:
+          type: boolean
+        llm_available:
+          type: boolean
+        version:
+          type: string
+
+    ErrorResponse:
+      type: object
+      required: [error, message, timestamp]
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        details:
+          type: object
+          additionalProperties: true

@@ -1,0 +1,346 @@
+openapi: 3.0.3
+info:
+  title: NetworkTracker Congestion Detection Service
+  description: >
+    FastAPI-based congestion detection service. Consumes real-time traffic data
+    from Kafka, analyzes for anomalies using statistical methods (v1: z-score /
+    IQR thresholding), and publishes congestion alert events to the message
+    broker. Also exposes a REST API for on-demand analysis.
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:8102
+    description: Local development server
+
+security:
+  - bearerAuth: []
+
+paths:
+  /analyze:
+    post:
+      summary: Analyze data for congestion
+      description: >
+        Accepts a batch of traffic data points and returns detected anomalies.
+        This is the synchronous REST endpoint; the service also continuously
+        consumes from Kafka for real-time detection.
+      operationId: analyzeTraffic
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AnalyzeRequest'
+      responses:
+        '200':
+          description: Analysis completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalyzeResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /status:
+    get:
+      summary: Get current congestion status
+      description: Returns the latest congestion analysis snapshot.
+      operationId: getCongestionStatus
+      responses:
+        '200':
+          description: Current status returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CongestionStatus'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /alerts/recent:
+    get:
+      summary: Get recent alerts
+      description: Returns the most recent congestion alerts detected by the service.
+      operationId: getRecentAlerts
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 200
+        - name: severity
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [low, medium, high, critical]
+      responses:
+        '200':
+          description: Recent alerts returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlertsListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /config:
+    get:
+      summary: Get detection configuration
+      description: Returns current thresholds and detection parameters.
+      operationId: getConfig
+      responses:
+        '200':
+          description: Configuration returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetectionConfig'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    put:
+      summary: Update detection configuration
+      description: Update detection thresholds and parameters at runtime.
+      operationId: updateConfig
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DetectionConfig'
+      responses:
+        '200':
+          description: Configuration updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetectionConfig'
+        '400':
+          description: Invalid configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /health:
+    get:
+      summary: Health check
+      description: Returns service health including Kafka connectivity.
+      operationId: healthCheck
+      security: []
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        Service-to-service JWT obtained via OAuth2 client-credentials flow
+        against Keycloak.
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid service-to-service JWT
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+    AnalyzeRequest:
+      type: object
+      required: [data_points]
+      properties:
+        data_points:
+          type: array
+          items:
+            $ref: '#/components/schemas/TrafficDataPoint'
+          minItems: 1
+          description: Batch of traffic data points to analyze
+
+    TrafficDataPoint:
+      type: object
+      required: [timestamp, metric, value, source_ip]
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        metric:
+          type: string
+          enum: [bandwidth, packets, latency, connections]
+        value:
+          type: number
+          format: float
+        source_ip:
+          type: string
+          description: Source IP address of the traffic
+
+    AnalyzeResponse:
+      type: object
+      required: [anomalies, data_points_analyzed]
+      properties:
+        anomalies:
+          type: array
+          items:
+            $ref: '#/components/schemas/CongestionAlert'
+        data_points_analyzed:
+          type: integer
+        anomaly_count:
+          type: integer
+        processing_time_ms:
+          type: integer
+
+    CongestionAlert:
+      type: object
+      required: [alert_id, severity, source_ip, metric, threshold, actual_value, timestamp]
+      properties:
+        alert_id:
+          type: string
+          format: uuid
+        severity:
+          type: string
+          enum: [low, medium, high, critical]
+        source_ip:
+          type: string
+        metric:
+          type: string
+        threshold:
+          type: number
+          format: float
+          description: The threshold that was exceeded
+        actual_value:
+          type: number
+          format: float
+          description: The actual observed value
+        timestamp:
+          type: string
+          format: date-time
+        message:
+          type: string
+          description: Human-readable description of the anomaly
+        detection_method:
+          type: string
+          enum: [z_score, iqr, model_based]
+          description: Algorithm that detected this anomaly
+
+    CongestionStatus:
+      type: object
+      required: [overall_status, active_anomalies, last_updated]
+      properties:
+        overall_status:
+          type: string
+          enum: [normal, elevated, congested, critical]
+        active_anomalies:
+          type: integer
+        metrics_monitored:
+          type: array
+          items:
+            type: string
+        last_updated:
+          type: string
+          format: date-time
+        kafka_consumer_lag:
+          type: integer
+          description: Current consumer lag on the traffic topic
+
+    AlertsListResponse:
+      type: object
+      required: [alerts, total]
+      properties:
+        alerts:
+          type: array
+          items:
+            $ref: '#/components/schemas/CongestionAlert'
+        total:
+          type: integer
+
+    DetectionConfig:
+      type: object
+      properties:
+        z_score_threshold:
+          type: number
+          format: float
+          default: 3.0
+          description: Z-score threshold for anomaly detection
+        iqr_multiplier:
+          type: number
+          format: float
+          default: 1.5
+          description: IQR multiplier for outlier detection
+        window_size:
+          type: integer
+          default: 100
+          description: Sliding window size for statistical calculations
+        severity_thresholds:
+          type: object
+          properties:
+            low:
+              type: number
+              format: float
+              default: 2.0
+            medium:
+              type: number
+              format: float
+              default: 3.0
+            high:
+              type: number
+              format: float
+              default: 4.0
+            critical:
+              type: number
+              format: float
+              default: 5.0
+        enabled_metrics:
+          type: array
+          items:
+            type: string
+            enum: [bandwidth, packets, latency, connections]
+
+    HealthResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+        kafka_connected:
+          type: boolean
+        consumer_active:
+          type: boolean
+        alerts_published:
+          type: integer
+          description: Total alerts published since startup
+        version:
+          type: string
+
+    ErrorResponse:
+      type: object
+      required: [error, message, timestamp]
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        details:
+          type: object
+          additionalProperties: true

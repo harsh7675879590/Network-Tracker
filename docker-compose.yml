@@ -1,0 +1,463 @@
+# ============================================================================
+# NetworkTracker — Docker Compose (Infrastructure Services)
+# ============================================================================
+# One-command local environment: docker-compose up
+# All services have health checks and proper dependency ordering.
+# Phase 5 will add the custom application services (Spring Boot, FastAPI, React).
+# ============================================================================
+
+services:
+  # ──────────────────────────────────────────────
+  # Keycloak — OAuth2 / OIDC Identity Provider
+  # ──────────────────────────────────────────────
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0
+    container_name: networktracker-keycloak
+    command: start-dev --import-realm
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-networktracker}
+      KC_DB_USERNAME: ${POSTGRES_USER:-networktracker}
+      KC_DB_PASSWORD: ${POSTGRES_PASSWORD:-networktracker}
+      KC_HEALTH_ENABLED: "true"
+      KC_METRICS_ENABLED: "true"
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./infrastructure/keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080; echo -e 'GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3; cat <&3 | grep -q '200'"]
+      interval: 15s
+      timeout: 10s
+      retries: 15
+      start_period: 60s
+    networks:
+      - networktracker-net
+
+  # ──────────────────────────────────────────────
+  # PostgreSQL — App metadata, user preferences
+  # ──────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: networktracker-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-networktracker}
+      POSTGRES_USER: ${POSTGRES_USER:-networktracker}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-networktracker}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infrastructure/postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-networktracker} -d ${POSTGRES_DB:-networktracker}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks:
+      - networktracker-net
+
+  # ──────────────────────────────────────────────
+  # TimescaleDB — Time-series network traffic data
+  # (Postgres extension — same tooling/ORMs, but with
+  #  hypertables, retention policies, continuous aggregates)
+  # ──────────────────────────────────────────────
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    container_name: networktracker-timescaledb
+    environment:
+      POSTGRES_DB: ${TIMESCALEDB_DB:-networktracker_ts}
+      POSTGRES_USER: ${TIMESCALEDB_USER:-networktracker}
+      POSTGRES_PASSWORD: ${TIMESCALEDB_PASSWORD:-networktracker}
+    ports:
+      - "5433:5432"
+    volumes:
+      - timescaledb-data:/var/lib/postgresql/data
+      - ./infrastructure/timescaledb/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${TIMESCALEDB_USER:-networktracker} -d ${TIMESCALEDB_DB:-networktracker_ts}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks:
+      - networktracker-net
+
+  # ──────────────────────────────────────────────
+  # ChromaDB — Vector database for RAG
+  # ──────────────────────────────────────────────
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: networktracker-chromadb
+    environment:
+      IS_PERSISTENT: "TRUE"
+      ANONYMIZED_TELEMETRY: "FALSE"
+    ports:
+      - "8000:8000"
+    volumes:
+      - chromadb-data:/chroma/chroma
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/api/v1/heartbeat || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - networktracker-net
+
+  # ──────────────────────────────────────────────
+  # Zookeeper — Required by Kafka
+  # ──────────────────────────────────────────────
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    container_name: networktracker-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    volumes:
+      - zookeeper-data:/var/lib/zookeeper/data
+      - zookeeper-log:/var/lib/zookeeper/log
+    healthcheck:
+      test: ["CMD-SHELL", "echo ruok | nc localhost 2181 | grep imok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks:
+      - networktracker-net
+
+  # ──────────────────────────────────────────────
+  # Kafka — Message broker for real-time events
+  # Topics: network.traffic.raw, network.congestion.alerts
+  # ──────────────────────────────────────────────
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: networktracker-kafka
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    ports:
+      - "9092:9092"
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 15
+      start_period: 30s
+    networks:
+      - networktracker-net
+
+  # ──────────────────────────────────────────────
+  # Kafka Topic Init — Creates required topics
+  # ──────────────────────────────────────────────
+  kafka-init:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: networktracker-kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command: |
+      "
+      echo 'Creating Kafka topics...'
+      kafka-topics --create --if-not-exists --bootstrap-server kafka:29092 --replication-factor 1 --partitions 3 --topic network.traffic.raw
+      kafka-topics --create --if-not-exists --bootstrap-server kafka:29092 --replication-factor 1 --partitions 3 --topic network.congestion.alerts
+      echo 'Kafka topics created successfully.'
+      kafka-topics --list --bootstrap-server kafka:29092
+      "
+    networks:
+      - networktracker-net
+
+  # ──────────────────────────────────────────────
+  # Elasticsearch — Centralized logging
+  # ──────────────────────────────────────────────
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.13.0
+    container_name: networktracker-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - xpack.security.http.ssl.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+      - cluster.name=networktracker-cluster
+    ports:
+      - "9200:9200"
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=10s || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 15
+      start_period: 45s
+    networks:
+      - networktracker-net
+
+  # ──────────────────────────────────────────────
+  # Kibana — Log visualization UI
+  # ──────────────────────────────────────────────
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.13.0
+    container_name: networktracker-kibana
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - xpack.security.enabled=false
+    ports:
+      - "5601:5601"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5601/api/status || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 15
+      start_period: 60s
+    networks:
+      - networktracker-net
+
+  # ──────────────────────────────────────────────
+  # OpenTelemetry Collector — Trace collection
+  # ──────────────────────────────────────────────
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.98.0
+    container_name: networktracker-otel-collector
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./infrastructure/otel/otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
+    ports:
+      - "4317:4317"   # OTLP gRPC receiver
+      - "4318:4318"   # OTLP HTTP receiver
+      - "8888:8888"   # Prometheus metrics exposed by the collector
+    depends_on:
+      jaeger:
+        condition: service_healthy
+    networks:
+      - networktracker-net
+
+  # ──────────────────────────────────────────────
+  # Jaeger — Distributed tracing UI
+  # ──────────────────────────────────────────────
+  jaeger:
+    image: jaegertracing/all-in-one:1.55
+    container_name: networktracker-jaeger
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    ports:
+      - "16686:16686"  # Jaeger UI
+      - "14250:14250"  # gRPC collector
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:16686/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks:
+      - networktracker-net
+
+  # ============================================================================
+  # APPLICATION SERVICES (Phase 5 — Containerized custom services)
+  # ============================================================================
+
+  # ──────────────────────────────────────────────
+  # Spring Boot Backend — Gateway / Orchestrator
+  # ──────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: networktracker-backend
+    ports:
+      - "8081:8081"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-networktracker}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-networktracker}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-networktracker}
+      KEYCLOAK_ISSUER_URI: http://keycloak:8080/realms/networktracker
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      RAG_SERVICE_URL: http://rag-service:8100
+      FORECAST_SERVICE_URL: http://forecast-service:8101
+      CONGESTION_SERVICE_URL: http://congestion-service:8102
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_SERVICE_NAME: networktracker-backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8081/actuator/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 45s
+    networks:
+      - networktracker-net
+
+  # ──────────────────────────────────────────────
+  # RAG Chatbot Service (FastAPI)
+  # ──────────────────────────────────────────────
+  rag-service:
+    build:
+      context: ./ai-services/rag
+      dockerfile: Dockerfile
+    container_name: networktracker-rag
+    ports:
+      - "8100:8100"
+    environment:
+      RAG_CHROMADB_HOST: chromadb
+      RAG_CHROMADB_PORT: 8000
+      RAG_OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+    depends_on:
+      chromadb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8100/health')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - networktracker-net
+
+  # ──────────────────────────────────────────────
+  # Forecast Service (FastAPI)
+  # ──────────────────────────────────────────────
+  forecast-service:
+    build:
+      context: ./ai-services/forecast
+      dockerfile: Dockerfile
+    container_name: networktracker-forecast
+    ports:
+      - "8101:8101"
+    environment:
+      FORECAST_TIMESCALEDB_HOST: timescaledb
+      FORECAST_TIMESCALEDB_PORT: 5432
+      FORECAST_TIMESCALEDB_DB: ${TIMESCALEDB_DB:-networktracker_ts}
+      FORECAST_TIMESCALEDB_USER: ${TIMESCALEDB_USER:-networktracker}
+      FORECAST_TIMESCALEDB_PASSWORD: ${TIMESCALEDB_PASSWORD:-networktracker}
+      FORECAST_OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8101/health')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - networktracker-net
+
+  # ──────────────────────────────────────────────
+  # Congestion Detection Service (FastAPI)
+  # ──────────────────────────────────────────────
+  congestion-service:
+    build:
+      context: ./ai-services/congestion
+      dockerfile: Dockerfile
+    container_name: networktracker-congestion
+    ports:
+      - "8102:8102"
+    environment:
+      CONGESTION_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      CONGESTION_KAFKA_TRAFFIC_TOPIC: network.traffic.raw
+      CONGESTION_KAFKA_ALERTS_TOPIC: network.congestion.alerts
+      CONGESTION_OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+    depends_on:
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8102/health')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - networktracker-net
+
+  # ──────────────────────────────────────────────
+  # Network Data Simulator
+  # ──────────────────────────────────────────────
+  simulator:
+    build:
+      context: ./ai-services/simulator
+      dockerfile: Dockerfile
+    container_name: networktracker-simulator
+    environment:
+      SIMULATOR_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      SIMULATOR_KAFKA_TOPIC: network.traffic.raw
+      SIMULATOR_RATE_PER_SECOND: ${SIMULATOR_RATE_PER_SECOND:-10}
+      SIMULATOR_ANOMALY_PROBABILITY: ${SIMULATOR_ANOMALY_PROBABILITY:-0.05}
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - networktracker-net
+
+  # ──────────────────────────────────────────────
+  # React Frontend
+  # ──────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: networktracker-frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - networktracker-net
+
+# ──────────────────────────────────────────────
+# Named volumes for stateful services
+# ──────────────────────────────────────────────
+volumes:
+  postgres-data:
+    name: networktracker-postgres-data
+  timescaledb-data:
+    name: networktracker-timescaledb-data
+  chromadb-data:
+    name: networktracker-chromadb-data
+  zookeeper-data:
+    name: networktracker-zookeeper-data
+  zookeeper-log:
+    name: networktracker-zookeeper-log
+  elasticsearch-data:
+    name: networktracker-elasticsearch-data
+
+# ──────────────────────────────────────────────
+# Shared Docker network
+# ──────────────────────────────────────────────
+networks:
+  networktracker-net:
+    name: networktracker-net
+    driver: bridge
+

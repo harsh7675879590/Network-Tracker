@@ -1,0 +1,39 @@
+# ── Environment ──
+.env
+.env.local
+.env.*.local
+
+# ── IDE ──
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ── OS ──
+.DS_Store
+Thumbs.db
+
+# ── Dependencies ──
+node_modules/
+frontend/node_modules/
+
+# ── Build output ──
+frontend/dist/
+backend/target/
+*.class
+*.jar
+
+# ── Python ──
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# ── Docker ──
+docker-compose.override.yml
+
+# ── Logs ──
+*.log

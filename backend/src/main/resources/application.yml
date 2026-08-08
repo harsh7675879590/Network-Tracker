@@ -1,0 +1,135 @@
+# ============================================================================
+# NetworkTracker Backend — Application Configuration
+# ============================================================================
+
+server:
+  port: 8081
+
+spring:
+  application:
+    name: networktracker-backend
+
+  # ── PostgreSQL (app metadata, user preferences) ──
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/networktracker}
+    username: ${SPRING_DATASOURCE_USERNAME:networktracker}
+    password: ${SPRING_DATASOURCE_PASSWORD:networktracker}
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+
+  # ── Keycloak OAuth2 ──
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${KEYCLOAK_ISSUER_URI:http://localhost:8080/realms/networktracker}
+          jwk-set-uri: ${KEYCLOAK_ISSUER_URI:http://localhost:8080/realms/networktracker}/protocol/openid-connect/certs
+      client:
+        registration:
+          internal-service:
+            client-id: ${KEYCLOAK_INTERNAL_CLIENT_ID:internal-service}
+            client-secret: ${KEYCLOAK_INTERNAL_CLIENT_SECRET:internal-service-secret}
+            authorization-grant-type: client_credentials
+            scope: openid
+        provider:
+          internal-service:
+            issuer-uri: ${KEYCLOAK_ISSUER_URI:http://localhost:8080/realms/networktracker}
+            token-uri: ${KEYCLOAK_ISSUER_URI:http://localhost:8080/realms/networktracker}/protocol/openid-connect/token
+
+  # ── Kafka ──
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      group-id: networktracker-gateway
+      auto-offset-reset: latest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+
+  # ── Jackson ──
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+    default-property-inclusion: non_null
+
+# ── Downstream FastAPI Service URLs ──
+networktracker:
+  services:
+    rag:
+      url: ${RAG_SERVICE_URL:http://localhost:8100}
+    forecast:
+      url: ${FORECAST_SERVICE_URL:http://localhost:8101}
+    congestion:
+      url: ${CONGESTION_SERVICE_URL:http://localhost:8102}
+  kafka:
+    alerts-topic: ${KAFKA_ALERTS_TOPIC:network.congestion.alerts}
+
+# ── Resilience4j ──
+resilience4j:
+  circuitbreaker:
+    instances:
+      rag-service:
+        registerHealthIndicator: true
+        failureRateThreshold: 50
+        slowCallRateThreshold: 80
+        slowCallDurationThreshold: 5s
+        waitDurationInOpenState: 30s
+        permittedNumberOfCallsInHalfOpenState: 3
+        slidingWindowSize: 10
+        minimumNumberOfCalls: 5
+      forecast-service:
+        registerHealthIndicator: true
+        failureRateThreshold: 50
+        waitDurationInOpenState: 30s
+        slidingWindowSize: 10
+      congestion-service:
+        registerHealthIndicator: true
+        failureRateThreshold: 50
+        waitDurationInOpenState: 30s
+        slidingWindowSize: 10
+  retry:
+    instances:
+      rag-service:
+        maxAttempts: 3
+        waitDuration: 500ms
+        enableExponentialBackoff: true
+      forecast-service:
+        maxAttempts: 3
+        waitDuration: 500ms
+        enableExponentialBackoff: true
+      congestion-service:
+        maxAttempts: 3
+        waitDuration: 500ms
+        enableExponentialBackoff: true
+
+# ── Actuator ──
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,circuitbreakers
+  health:
+    circuitbreakers:
+      enabled: true
+
+# ── OpenTelemetry ──
+otel:
+  exporter:
+    otlp:
+      endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4317}
+  resource:
+    attributes:
+      service.name: networktracker-backend
+
+# ── Logging ──
+logging:
+  level:
+    com.networktracker: INFO
+    org.springframework.security: WARN
+    io.github.resilience4j: INFO
