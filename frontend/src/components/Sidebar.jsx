@@ -1,5 +1,5 @@
 /**
- * NetworkTracker — Sidebar Component
+ * Netbarriers — Sidebar Component
  */
 
 import { useState } from 'react';
@@ -7,9 +7,8 @@ import { useState } from 'react';
 export default function Sidebar({ activeView, onViewChange }) {
   return (
     <aside className="sidebar">
-      <div className="logo">
-        <div className="logo-icon">🌐</div>
-        <span className="logo-text">NetworkTracker</span>
+      <div className="logo" style={{ display: 'flex', alignItems: 'center', margin: '-10px 0' }}>
+        <img src="/logo-wide.svg" alt="Netbarriers Logo" className="logo-icon" style={{ width: '100%', height: 'auto', borderRadius: 0, background: 'transparent', boxShadow: 'none' }} />
       </div>
 
       <nav>

@@ -8,7 +8,7 @@ WORKDIR /app
 
 # Security: non-root user
 RUN groupadd -g 1001 appgroup && \
-    useradd -u 1001 -g appgroup -s /bin/bash appuser
+    useradd -u 1001 -g appgroup -m -s /bin/bash appuser
 USER appuser
 
 COPY --from=build /install /usr/local

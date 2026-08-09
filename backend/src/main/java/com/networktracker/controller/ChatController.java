@@ -30,7 +30,8 @@ public class ChatController {
     public ResponseEntity<ApiDtos.ChatResponse> chatQuery(
             @Valid @RequestBody ApiDtos.ChatRequest request,
             @AuthenticationPrincipal Jwt jwt) {
-        log.info("Chat query from user {}: {}", jwt.getSubject(), request.getQuestion());
+        String user = (jwt != null) ? jwt.getSubject() : "anonymous";
+        log.info("Chat query from user {}: {}", user, request.getQuestion());
         ApiDtos.ChatResponse response = ragServiceClient.query(request);
         return ResponseEntity.ok(response);
     }
@@ -40,7 +41,8 @@ public class ChatController {
     public ResponseEntity<ApiDtos.ChatHistoryResponse> getChatHistory(
             @RequestParam(defaultValue = "20") int limit,
             @AuthenticationPrincipal Jwt jwt) {
-        log.info("Chat history request from user {}", jwt.getSubject());
+        String user = (jwt != null) ? jwt.getSubject() : "anonymous";
+        log.info("Chat history request from user {}", user);
         return ResponseEntity.ok(ApiDtos.ChatHistoryResponse.builder()
                 .messages(Collections.emptyList())
                 .build());
