@@ -326,6 +326,9 @@ services:
       RAG_CHROMADB_HOST: chromadb
       RAG_CHROMADB_PORT: 8000
       RAG_OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      RAG_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      RAG_KAFKA_TRAFFIC_TOPIC: network.traffic.raw
+      RAG_KAFKA_ALERTS_TOPIC: network.congestion.alerts
     depends_on:
       chromadb:
         condition: service_healthy

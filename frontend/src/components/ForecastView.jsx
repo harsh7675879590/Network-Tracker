@@ -11,30 +11,42 @@ import {
 } from 'recharts';
 import apiClient from '../api/client';
 
-// ── Generate demo data per metric ──
-function generateMetricData(metric) {
+// ── Helper to format data for charts ──
+function formatChartData(history, predictions) {
   const data = [];
-  const now = new Date();
-  const bases = { bandwidth: 500, packets: 10000, latency: 25, connections: 200 };
-  const base = bases[metric] || 100;
-
-  for (let i = -24; i < 24; i++) {
-    const time = new Date(now.getTime() + i * 3600000);
-    const hour = time.getHours();
-    const diurnal = 1 + 0.5 * Math.sin(Math.PI * (hour - 6) / 12);
-    const actual = base * diurnal + (Math.random() - 0.5) * base * 0.15;
-    const predicted = base * diurnal + (Math.random() - 0.5) * base * 0.1 + base * 0.03;
-    const std = base * 0.15;
-
-    data.push({
-      time: `${time.getMonth() + 1}/${time.getDate()} ${hour}:00`,
-      actual: i < 0 ? Math.round(actual) : null,
-      predicted: i >= 0 ? Math.round(predicted) : null,
-      lower: i >= 0 ? Math.round(predicted - 2 * std) : null,
-      upper: i >= 0 ? Math.round(predicted + 2 * std) : null,
-      isPrediction: i >= 0,
+  
+  if (history?.data) {
+    history.data.forEach(p => {
+      const time = new Date(p.timestamp);
+      data.push({
+        time: `${time.getMonth() + 1}/${time.getDate()} ${time.getHours()}:00`,
+        fullTime: time,
+        actual: Math.round(p.value),
+        predicted: null,
+        lower: null,
+        upper: null,
+        isPrediction: false,
+      });
     });
   }
+  
+  if (predictions?.predictions) {
+    predictions.predictions.forEach(p => {
+      const time = new Date(p.timestamp);
+      data.push({
+        time: `${time.getMonth() + 1}/${time.getDate()} ${time.getHours()}:00`,
+        fullTime: time,
+        actual: null,
+        predicted: Math.round(p.value),
+        lower: Math.round(p.lower_bound || 0),
+        upper: Math.round(p.upper_bound || 0),
+        isPrediction: true,
+      });
+    });
+  }
+
+  // Sort by time
+  data.sort((a, b) => a.fullTime - b.fullTime);
   return data;
 }
 
@@ -58,6 +70,8 @@ function CustomTooltip({ active, payload, label }) {
   );
 }
 
+import { useMemo } from 'react';
+
 export default function ForecastView() {
   const [metric, setMetric] = useState('bandwidth');
   const [granularity, setGranularity] = useState('1h');
@@ -70,7 +84,39 @@ export default function ForecastView() {
   ];
 
   const granularities = ['1m', '5m', '15m', '1h', '1d'];
-  const chartData = generateMetricData(metric);
+  
+  const now = new Date();
+  const past24h = new Date(now.getTime() - 24 * 3600000);
+  const future24h = new Date(now.getTime() + 24 * 3600000);
+
+  const { data: historyResponse } = useQuery({
+    queryKey: ['forecast-history', metric, granularity],
+    queryFn: () => apiClient.getTrafficHistory({
+      metric,
+      start_time: past24h.toISOString(),
+      end_time: now.toISOString(),
+      granularity
+    }),
+    refetchInterval: 60000,
+  });
+
+  const { data: forecastResponse } = useQuery({
+    queryKey: ['forecast-predict', metric, granularity],
+    queryFn: () => apiClient.requestForecast({
+      metric,
+      time_range: {
+        start: now.toISOString(),
+        end: future24h.toISOString()
+      },
+      granularity
+    }),
+    refetchInterval: 60000,
+  });
+
+  const chartData = useMemo(() => {
+    return formatChartData(historyResponse, forecastResponse);
+  }, [historyResponse, forecastResponse]);
+
   const currentMetric = metrics.find(m => m.id === metric);
 
   return (

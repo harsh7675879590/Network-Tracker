@@ -6,7 +6,9 @@ Ingests network logs into ChromaDB and answers natural-language queries
 about the network with source citations.
 """
 
+import json
 import logging
+import threading
 import time
 import uuid
 from datetime import datetime, timezone
@@ -26,6 +28,10 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_model: str = "gpt-3.5-turbo"
     otel_exporter_otlp_endpoint: str = "http://localhost:4317"
+    kafka_bootstrap_servers: str = "localhost:9092"
+    kafka_traffic_topic: str = "network.traffic.raw"
+    kafka_alerts_topic: str = "network.congestion.alerts"
+    kafka_consumer_group: str = "rag-ingestion"
     log_level: str = "INFO"
 
     class Config:
@@ -148,6 +154,175 @@ def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> list[str]
     return chunks
 
 
+# ── Kafka Auto-Ingestion (background thread) ─────────────────
+
+kafka_connected = False
+kafka_ingested_count = 0
+
+
+def format_traffic_log(data: dict) -> str:
+    """Convert a raw traffic data point into a human-readable log entry."""
+    ts = data.get("timestamp", "unknown")
+    metric = data.get("metric", "unknown")
+    value = data.get("value", 0)
+    source_ip = data.get("source_ip", "unknown")
+    meta = data.get("metadata", {})
+    protocol = meta.get("protocol", "")
+    interface = meta.get("interface", "")
+    dest_ip = meta.get("destination_ip", "")
+
+    unit_map = {"bandwidth": "Mbps", "packets": "pkt/s", "latency": "ms", "connections": "active"}
+    unit = unit_map.get(metric, "")
+
+    parts = [
+        f"[{ts}] TRAFFIC source_ip={source_ip} metric={metric} value={value:.2f}{unit}",
+    ]
+    if protocol:
+        parts.append(f"protocol={protocol}")
+    if interface:
+        parts.append(f"interface={interface}")
+    if dest_ip:
+        parts.append(f"dest_ip={dest_ip}")
+    return " ".join(parts)
+
+
+def format_alert_log(data: dict) -> str:
+    """Convert a congestion alert into a human-readable log entry."""
+    ts = data.get("timestamp", "unknown")
+    severity = data.get("severity", "unknown")
+    source_ip = data.get("source_ip", "unknown")
+    metric = data.get("metric", "unknown")
+    threshold = data.get("threshold", 0)
+    actual = data.get("actual_value", 0)
+    method = data.get("detection_method", "unknown")
+    message = data.get("message", "")
+    alert_id = data.get("alert_id", "unknown")
+
+    return (
+        f"[{ts}] ALERT severity={severity} alert_id={alert_id} "
+        f"source_ip={source_ip} metric={metric} "
+        f"actual_value={actual} threshold={threshold} "
+        f"detection_method={method} message=\"{message}\""
+    )
+
+
+def kafka_ingestion_thread():
+    """Background thread: consume traffic + alerts from Kafka, ingest into ChromaDB."""
+    global kafka_connected, kafka_ingested_count
+
+    try:
+        from confluent_kafka import Consumer, KafkaError
+    except ImportError:
+        logger.warning("confluent-kafka not installed; Kafka auto-ingestion disabled")
+        return
+
+    # Retry connecting to Kafka (it may start after RAG)
+    max_retries = 30
+    for attempt in range(max_retries):
+        try:
+            consumer_conf = {
+                "bootstrap.servers": settings.kafka_bootstrap_servers,
+                "group.id": settings.kafka_consumer_group,
+                "auto.offset.reset": "latest",
+                "enable.auto.commit": "true",
+            }
+            consumer = Consumer(consumer_conf)
+            consumer.subscribe([
+                settings.kafka_traffic_topic,
+                settings.kafka_alerts_topic,
+            ])
+            kafka_connected = True
+            logger.info(
+                f"Kafka ingestion started — consuming [{settings.kafka_traffic_topic}, "
+                f"{settings.kafka_alerts_topic}]"
+            )
+            break
+        except Exception as e:
+            logger.warning(f"Kafka connect attempt {attempt+1}/{max_retries} failed: {e}")
+            time.sleep(2)
+    else:
+        logger.error("Could not connect to Kafka after retries; auto-ingestion disabled")
+        return
+
+    # Batch buffer
+    batch_docs = []
+    batch_ids = []
+    batch_metas = []
+    BATCH_SIZE = 50
+    FLUSH_INTERVAL = 5  # seconds
+    last_flush = time.time()
+
+    def flush_batch():
+        nonlocal batch_docs, batch_ids, batch_metas, last_flush
+        global kafka_ingested_count
+        if not batch_docs:
+            return
+        try:
+            client = get_chroma_client()
+            if client:
+                collection = get_collection(client)
+                collection.upsert(
+                    documents=batch_docs,
+                    ids=batch_ids,
+                    metadatas=batch_metas,
+                )
+                kafka_ingested_count += len(batch_docs)
+                logger.info(f"Auto-ingested {len(batch_docs)} docs into ChromaDB (total: {kafka_ingested_count})")
+        except Exception as e:
+            logger.error(f"Failed to flush batch to ChromaDB: {e}")
+        batch_docs = []
+        batch_ids = []
+        batch_metas = []
+        last_flush = time.time()
+
+    while True:
+        try:
+            msg = consumer.poll(timeout=1.0)
+
+            if msg is None:
+                # Flush on timeout if buffer has data
+                if batch_docs and (time.time() - last_flush) >= FLUSH_INTERVAL:
+                    flush_batch()
+                continue
+
+            if msg.error():
+                if msg.error().code() == KafkaError._PARTITION_EOF:
+                    continue
+                logger.error(f"Kafka error: {msg.error()}")
+                continue
+
+            topic = msg.topic()
+            data = json.loads(msg.value().decode("utf-8"))
+
+            if topic == settings.kafka_alerts_topic:
+                doc_text = format_alert_log(data)
+                source = "congestion-alert"
+            else:
+                doc_text = format_traffic_log(data)
+                source = "traffic-raw"
+
+            doc_id = str(uuid.uuid4())
+            meta = {
+                "source": source,
+                "timestamp": data.get("timestamp", datetime.now(timezone.utc).isoformat()),
+                "source_ip": data.get("source_ip", "unknown"),
+                "metric": data.get("metric", "unknown"),
+            }
+            if "severity" in data:
+                meta["severity"] = data["severity"]
+
+            batch_docs.append(doc_text)
+            batch_ids.append(doc_id)
+            batch_metas.append(meta)
+
+            if len(batch_docs) >= BATCH_SIZE:
+                flush_batch()
+
+        except Exception as e:
+            logger.error(f"Kafka ingestion error: {e}")
+            time.sleep(1)
+
+
 # ── FastAPI App ────────────────────────────────────────────────
 
 app = FastAPI(
@@ -162,6 +337,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Start the Kafka auto-ingestion background thread."""
+    thread = threading.Thread(target=kafka_ingestion_thread, daemon=True)
+    thread.start()
+    logger.info("Kafka auto-ingestion background thread started")
 
 
 @app.post("/query", response_model=RagQueryResponse)
