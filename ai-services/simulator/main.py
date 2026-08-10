@@ -90,21 +90,29 @@ def generate_data_point() -> dict:
     metric = random.choice(METRICS)
     base = BASE_VALUES[metric] * diurnal_factor
     noise = random.gauss(0, NOISE_SCALE[metric])
+    source_ip = random.choice(SOURCE_IPS)
 
-    # Anomaly injection
+    # Event type & Anomaly injection
     is_anomaly = random.random() < settings.anomaly_probability
+    is_reject = random.random() < 0.05
+    event_type = "TRAFFIC"
+
     if is_anomaly:
+        event_type = "ANOMALY"
         # Spike: 3-8x the base value
         multiplier = random.uniform(3.0, 8.0)
         value = base * multiplier + noise
         logger.debug(f"Injecting anomaly: {metric}={value:.2f} (multiplier: {multiplier:.1f}x)")
+    elif is_reject:
+        event_type = "REJECT"
+        value = 0 # No traffic transferred on block
+        logger.debug(f"Injecting reject event for {source_ip}")
     else:
         value = max(0, base + noise)
 
-    source_ip = random.choice(SOURCE_IPS)
-
     return {
         "timestamp": now.isoformat(),
+        "event_type": event_type,
         "metric": metric,
         "value": round(value, 4),
         "source_ip": source_ip,

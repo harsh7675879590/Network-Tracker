@@ -170,12 +170,13 @@ def format_traffic_log(data: dict) -> str:
     protocol = meta.get("protocol", "")
     interface = meta.get("interface", "")
     dest_ip = meta.get("destination_ip", "")
+    event_type = data.get("event_type", "TRAFFIC")
 
     unit_map = {"bandwidth": "Mbps", "packets": "pkt/s", "latency": "ms", "connections": "active"}
     unit = unit_map.get(metric, "")
 
     parts = [
-        f"[{ts}] TRAFFIC source_ip={source_ip} metric={metric} value={value:.2f}{unit}",
+        f"[{ts}] {event_type} source_ip={source_ip} metric={metric} value={value:.2f}{unit}",
     ]
     if protocol:
         parts.append(f"protocol={protocol}")
@@ -376,6 +377,11 @@ async def query_knowledge_base(request: RagQueryRequest):
         if results and results["documents"] and results["documents"][0]:
             for i, doc in enumerate(results["documents"][0]):
                 score = 1.0 - (results["distances"][0][i] if results["distances"] else 0)
+                
+                # Confidence Threshold Filter
+                if score < 0.60:
+                    continue
+
                 metadata = results["metadatas"][0][i] if results["metadatas"] else {}
 
                 sources.append(SourceCitation(
