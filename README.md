@@ -1,8 +1,10 @@
 <div align="center">
 
-# 🌐 NetworkTracker
+<img src="logo-wide.svg" alt="Netbarriers" width="380"/>
 
 ### *An AI-Powered, Real-Time Network Intelligence Platform*
+
+> *Three orbits. One core. Total network awareness.*
 
 [![Docker](https://img.shields.io/badge/Docker-Containerized-2496ED?logo=docker&logoColor=white)](https://docker.com)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.3-6DB33F?logo=spring&logoColor=white)](https://spring.io/projects/spring-boot)
@@ -11,7 +13,7 @@
 [![Kafka](https://img.shields.io/badge/Apache%20Kafka-Streaming-231F20?logo=apache-kafka&logoColor=white)](https://kafka.apache.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**NetworkTracker** is a production-grade, fully containerized network monitoring and intelligence platform. It combines real-time event streaming via Apache Kafka, AI-powered traffic forecasting, statistical anomaly/congestion detection, and a conversational RAG (Retrieval-Augmented Generation) chatbot — all served through a beautifully designed React dashboard, secured with OAuth2/Keycloak.
+**Netbarriers** is a production-grade, fully containerized network monitoring and intelligence platform. It combines real-time event streaming via Apache Kafka, AI-powered traffic forecasting, statistical anomaly/congestion detection, and a conversational RAG (Retrieval-Augmented Generation) chatbot — all served through a beautifully designed React dashboard, secured with OAuth2/Keycloak.
 
 [🚀 Quick Start](#-quick-start) · [🏗️ Architecture](#️-system-architecture) · [📦 Services](#-service-breakdown) · [📸 Screenshots](#-screenshots) · [⚙️ Configuration](#️-configuration) · [🔍 Observability](#-observability)
 
@@ -60,7 +62,7 @@
 
 ## 🏗️ System Architecture
 
-NetworkTracker follows a **polyglot microservices architecture** where each service owns its domain, communicates asynchronously via Apache Kafka, and is independently deployable. The Spring Boot Gateway acts as the single entry point for all client requests.
+**Netbarriers** follows a **polyglot microservices architecture** where each service owns its domain, communicates asynchronously via Apache Kafka, and is independently deployable. The Spring Boot Gateway acts as the single entry point for all client requests.
 
 ```mermaid
 graph TB
@@ -388,7 +390,7 @@ The most sophisticated service — it continuously ingests network logs from bot
 
 ## 🗄️ Database Layer
 
-NetworkTracker uses **three purpose-specific databases**, each chosen for the workload it best handles:
+**Netbarriers** uses **three purpose-specific databases**, each chosen for the workload it best handles:
 
 ### 🐘 PostgreSQL (Port 5432)
 Stores all **relational, application-level data**: user preferences, alert acknowledgement history, dashboard configurations, and application metadata. Initialized with `infrastructure/postgres/init.sql`.
@@ -607,7 +609,7 @@ All configuration is managed through environment variables defined in `.env` and
 
 ## 🔍 Observability
 
-NetworkTracker ships with a full observability stack out of the box.
+**Netbarriers** ships with a full observability stack out of the box.
 
 ### 📊 Distributed Tracing with Jaeger
 
@@ -833,7 +835,11 @@ This project is licensed under the **MIT License** — see the [LICENSE](LICENSE
 
 <div align="center">
 
-Made with ❤️ by the Harshit Gupta
+<img src="logo-wide.svg" alt="Netbarriers" width="220"/>
+
+Made with ❤️ by **Harshit Gupta**
+
+*Three orbits. One core. Total network awareness.*
 
 ⭐ **Star this repo** if you find it useful!
 
